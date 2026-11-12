@@ -12,13 +12,21 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import javax.management.MBeanException;
+import javax.management.MBeanServerConnection;
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
+import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,6 +44,9 @@ class JmxServiceTest {
     @Mock
     private JmxDiscoveryService jmxDiscoveryService;
 
+    @Mock
+    private MBeanServerConnection mbeanServerConnection;
+
     private JmxService jmxService;
 
     // JUnit calls @BeforeEach methods via reflection
@@ -43,6 +54,10 @@ class JmxServiceTest {
     @SuppressWarnings("unused")
     void setUp() {
         jmxService = new JmxService(discoveryService, connectionManager, securityValidator, jmxDiscoveryService);
+        lenient().when(securityValidator.validateObjectName(any(ObjectName.class)))
+            .thenReturn(JmxSecurityValidator.ValidationResult.valid());
+        lenient().when(securityValidator.validateOperation(any(ObjectName.class), anyString(), any()))
+            .thenReturn(JmxSecurityValidator.ValidationResult.valid());
     }
 
     @Test
@@ -161,6 +176,230 @@ class JmxServiceTest {
             .contains("Total Attributes: 150")
             .contains("Total Operations: 75")
             .contains("Total Domains: 5");
+    }
+
+    // ========================================
+    // invokeOperation tests
+    // ========================================
+
+    private static final String UI_MBEAN = "aeol:type=ClientUiManagement";
+
+    private MBeanInfo createUiMBeanInfo() {
+        try {
+            List<MBeanInfo.MBeanOperationInfo> ops = List.of(
+                new MBeanInfo.MBeanOperationInfo(
+                    "inspectUi", "Inspect the UI", "java.lang.String", List.of(),
+                    javax.management.MBeanOperationInfo.INFO),
+                new MBeanInfo.MBeanOperationInfo(
+                    "click", "Click a UI element by id", "java.lang.String",
+                    List.of(new MBeanInfo.MBeanParameterInfo("id", "java.lang.String", "element id")),
+                    javax.management.MBeanOperationInfo.ACTION),
+                new MBeanInfo.MBeanOperationInfo(
+                    "setField", "Set a field", "void",
+                    List.of(
+                        new MBeanInfo.MBeanParameterInfo("name", "java.lang.String", "field name"),
+                        new MBeanInfo.MBeanParameterInfo("value", "java.lang.String", "field value")),
+                    javax.management.MBeanOperationInfo.ACTION),
+                new MBeanInfo.MBeanOperationInfo(
+                    "upload", "Upload data", "void",
+                    List.of(new MBeanInfo.MBeanParameterInfo("data", "javax.management.openmbean.CompositeData", "payload")),
+                    javax.management.MBeanOperationInfo.ACTION)
+            );
+            return new MBeanInfo(
+                new ObjectName(UI_MBEAN), "aeol.ClientUiManagement", "UI management",
+                List.of(), ops, List.of());
+        } catch (MalformedObjectNameException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void invokeOperation_withMatchingOverload_shouldInvokeAndReturnResult() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(eq(new ObjectName(UI_MBEAN)), eq("click"),
+            eq(new Object[]{"2"}), eq(new String[]{"java.lang.String"}))).thenReturn("clicked 2");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"2\"]");
+
+        // Then
+        assertThat(result).contains("Result (String): clicked 2").contains("executed in");
+    }
+
+    @Test
+    void invokeOperation_withNoArgs_shouldInvokeNoArgOverload() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(eq(new ObjectName(UI_MBEAN)), eq("inspectUi"),
+            eq(new Object[0]), eq(new String[0]))).thenReturn("ui-state");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "inspectUi", "[]");
+
+        // Then
+        assertThat(result).contains("Result (String): ui-state");
+    }
+
+    @Test
+    void invokeOperation_withWrongArgCount_shouldListAvailableSignatures() {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"1\",\"2\"]");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("No overload of 'click' takes 2 argument(s)")
+            .contains("click(java.lang.String id) : java.lang.String");
+    }
+
+    @Test
+    void invokeOperation_withUnknownOperation_shouldListAvailableOperations() {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "explode", "[]");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("Operation 'explode' not found")
+            .contains("inspectUi()")
+            .contains("click(java.lang.String id)");
+    }
+
+    @Test
+    void invokeOperation_withUnsupportedParameterType_shouldReturnClearError() {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "upload", "[\"{}\"]");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("Unsupported parameter type 'javax.management.openmbean.CompositeData'");
+    }
+
+    @Test
+    void invokeOperation_withInvalidJsonArguments_shouldReturnError() {
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "{not json");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("Invalid JSON arguments");
+    }
+
+    @Test
+    void invokeOperation_withNonArrayArguments_shouldReturnError() {
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "\"2\"");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("must be a JSON array of string values");
+    }
+
+    @Test
+    void invokeOperation_withMBeanException_shouldUnwrapCause() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("click"), any(), any()))
+            .thenThrow(new MBeanException(new IllegalArgumentException("no such element")));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"99\"]");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("IllegalArgumentException")
+            .contains("no such element");
+    }
+
+    @Test
+    void invokeOperation_withSecurityValidationFailure_shouldReturnSecurityError() {
+        // Given
+        when(securityValidator.validateObjectName(any(ObjectName.class)))
+            .thenReturn(JmxSecurityValidator.ValidationResult.invalid("blocked domain"));
+
+        // When
+        String result = jmxService.invokeOperation("java.lang:type=Memory", "gc", "[]");
+
+        // Then
+        assertThat(result).isEqualTo("Security validation failed: blocked domain");
+    }
+
+    @Test
+    void invokeOperation_withMalformedObjectName_shouldReturnError() {
+        // When
+        String result = jmxService.invokeOperation("invalid:name", "click", "[]");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("Invalid ObjectName format");
+    }
+
+    @Test
+    void invokeOperation_withMBeanNotFound_shouldReturnError() {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.empty());
+
+        // When
+        String result = jmxService.invokeOperation("unknown:type=Foo", "click", "[]");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("MBean not found: unknown:type=Foo");
+    }
+
+    @Test
+    void invokeOperation_withIoException_shouldReconnectAndRetryOnce() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("click"), any(), any()))
+            .thenThrow(new IOException("connection reset"))
+            .thenReturn("clicked after reconnect");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"2\"]");
+
+        // Then
+        assertThat(result).contains("Result (String): clicked after reconnect");
+        verify(connectionManager).reconnect();
+    }
+
+    @Test
+    void invokeOperation_withPersistentIoException_shouldReturnConnectionError() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("click"), any(), any()))
+            .thenThrow(new IOException("connection refused"));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"2\"]");
+
+        // Then
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("Connection failed")
+            .contains("switchJmxConnection");
+        verify(connectionManager).reconnect();
     }
 
     private MBeanInfo createMockMBeanInfo(String objectNameStr) {

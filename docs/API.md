@@ -4,7 +4,7 @@ This document provides detailed API reference for the JMX MCP Server tools and r
 
 ## Overview
 
-The JMX MCP Server exposes JMX functionality through the Model Context Protocol (MCP), providing 6 tools and dynamic resources for AI assistants to interact with Java applications.
+The JMX MCP Server exposes JMX functionality through the Model Context Protocol (MCP), providing 13 tools (core JMX operations plus connection management and discovery) and dynamic resources for AI assistants to interact with Java applications.
 
 ## Tools
 
@@ -182,6 +182,57 @@ Gets JMX connection status and statistics.
 }
 ```
 
+### 7. invokeOperation
+
+Invokes an operation on an MBean. This is how an agent drives application behavior exposed as JMX operations (e.g. clicking a button on a UI management MBean).
+
+**Parameters:**
+- `objectName` (required): The ObjectName of the MBean (e.g., "aeol:type=ClientUiManagement")
+- `operationName` (required): Name of the operation to invoke (e.g., "click")
+- `arguments` (required): JSON array of string values, e.g. `["2"]` for `click("2")`. Use `[]` for no-arg operations. The overload whose parameter count matches the array length is selected; supported parameter types in v1 are `String`, primitives and their wrappers.
+
+**Example Usage:**
+```json
+{
+  "name": "invokeOperation",
+  "arguments": {
+    "objectName": "aeol:type=ClientUiManagement",
+    "operationName": "click",
+    "arguments": "[\"2\"]"
+  }
+}
+```
+
+**Response (success):**
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Result (String): clicked 2 (executed in 12 ms)"
+    }
+  ]
+}
+```
+
+**Response (no matching overload):**
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Error invoking operation: No overload of 'click' takes 2 argument(s). Available signatures:\n  click(java.lang.String id) : java.lang.String [impact: ACTION]"
+    }
+  ]
+}
+```
+
+**Notes:**
+- If the MBean is not found or the operation name is unknown, the error lists the available operations/signatures of the MBean.
+- `MBeanException` causes are unwrapped into the error message (e.g. `IllegalArgumentException: no such element`).
+- On connection failure the server reconnects once and retries; if that fails the error suggests `switchJmxConnection`/reconnect.
+- Security validation (`JmxSecurityValidator`) runs before every invocation: dangerous domains are logged, dangerous operation names are only warnings unless listed in `jmx.mcp.security.dangerous-operations`, and argument values are checked for malicious patterns.
+
 ## Resources
 
 All JMX attributes are automatically exposed as MCP resources with the URI format:
@@ -326,3 +377,16 @@ jmx:
         - "restart"
       log-operations: true
 ```
+
+## Connection URLs
+
+The reliable way to connect to a remote (or local) JVM is the **RMI registry JNDI URL** on the configured JMX port:
+
+```
+service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi
+```
+
+Notes:
+- Local stub URLs (`service:jmx:rmi://127.0.0.1/stub/...`, obtained via the Attach API) can fail with `RemoteStub` serialVersionUID mismatches when the MCP server JVM differs from the target JVM. Prefer the registry route on the JMX port.
+- `type: local` entries without a URL cannot be dialed; use `discoverJmxServices()` or add a `REMOTE` connection with a registry URL. A `LOCAL` entry that carries a URL is automatically dialed as `REMOTE`.
+- Remote JMX with `authenticate=false` (e.g. the aeol Docker setup on port 1098) is **trusted-network-only** — anyone who can reach the port has full JMX access, including `invokeOperation`.

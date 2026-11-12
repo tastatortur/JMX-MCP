@@ -53,7 +53,56 @@ class JMXConnectionManagerTest {
         // Should throw exception when no active connection is available
         IllegalStateException exception = assertThrows(IllegalStateException.class,
             connectionManager::getConnection);
-        assertEquals("No active JMX connection available", exception.getMessage());
+        assertTrue(exception.getMessage().startsWith("No active JMX connection available"));
+    }
+
+    @Test
+    void testLocalConnectionWithUrlIsMappedToRemote() {
+        JmxConnectionProperties properties = new JmxConnectionProperties();
+        JMXConnectionManager connectionManager = new JMXConnectionManager(properties);
+
+        // A LOCAL entry carrying a JMX service URL (e.g. a discovered local stub)
+        // is stored as REMOTE so it can actually be dialed
+        boolean result = connectionManager.addConnection(
+            "local-with-url",
+            "Local with URL",
+            JmxConnectionProperties.ConnectionType.LOCAL,
+            "service:jmx:rmi:///jndi/rmi://localhost:1098/jmxrmi",
+            null,
+            null,
+            Map.of()
+        );
+
+        assertTrue(result);
+        var stored = connectionManager.getConnectionRegistry().getConnection("local-with-url");
+        assertTrue(stored.isPresent());
+        assertEquals(JmxConnectionProperties.ConnectionType.REMOTE, stored.get().type());
+        assertEquals("service:jmx:rmi:///jndi/rmi://localhost:1098/jmxrmi", stored.get().url());
+    }
+
+    @Test
+    void testConnectToLocalWithoutUrlFailsWithGuidance() {
+        JmxConnectionProperties properties = new JmxConnectionProperties();
+        JMXConnectionManager connectionManager = new JMXConnectionManager(properties);
+
+        connectionManager.addConnection(
+            "bare-local",
+            "Bare Local",
+            JmxConnectionProperties.ConnectionType.LOCAL,
+            null,
+            null,
+            null,
+            Map.of()
+        );
+
+        boolean connected = connectionManager.connectToConnection("bare-local");
+
+        assertFalse(connected);
+        var stored = connectionManager.getConnectionRegistry().getConnection("bare-local");
+        assertTrue(stored.isPresent());
+        assertEquals(JmxConnectionInfo.ConnectionStatus.FAILED, stored.get().status());
+        assertNotNull(stored.get().errorMessage());
+        assertTrue(stored.get().errorMessage().contains("service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi"));
     }
 
     @Test

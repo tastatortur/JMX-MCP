@@ -136,21 +136,27 @@ public class JMXConnectionManager {
         JmxConnectionInfo connectionInfo = connectionOpt.get();
 
         try {
-            if (connectionInfo.type() == JmxConnectionProperties.ConnectionType.LOCAL) {
-                // LOCAL connections are deprecated - fail with informative message
-                logger.warn("LOCAL connection type is deprecated. Use discovery service to find local processes.");
+            if (connectionInfo.type() == JmxConnectionProperties.ConnectionType.LOCAL
+                    && (connectionInfo.url() == null || connectionInfo.url().isBlank())) {
+                // A bare LOCAL entry has nothing to dial - fail with guidance instead of a generic deprecation error
+                logger.warn("LOCAL connection {} has no JMX service URL", connectionId);
                 JmxConnectionInfo failedConnection = connectionInfo.withStatus(
                     JmxConnectionInfo.ConnectionStatus.FAILED,
-                    "LOCAL connections are deprecated. Use discovery service to find local processes and connect via JMX URLs.");
+                    "LOCAL connections without a JMX service URL are not supported. Use discoverJmxServices() to "
+                        + "find local processes, or connect via a remote JNDI registry URL like "
+                        + "service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi.");
                 connectionRegistry.updateConnection(failedConnection);
                 return false;
-            } else {
-                // For remote connections (including local processes discovered via Attach API), create new connection
-                JmxConnectionInfo updatedConnection = createRemoteConnection(
-                    connectionInfo.id(), connectionInfo.name(), connectionInfo.url(),
-                    connectionInfo.username(), connectionInfo.password(), connectionInfo.properties());
-                connectionRegistry.updateConnection(updatedConnection);
             }
+
+            // Remote connections, and LOCAL entries carrying a discovered stub URL, are dialed the same way.
+            // Note: local stub URLs (service:jmx:rmi://.../stub/...) can fail with RemoteStub serialVersionUID
+            // mismatches when the MCP server JVM differs from the target JVM - the RMI registry route
+            // (service:jmx:rmi:///jndi/rmi://host:port/jmxrmi) is the reliable path.
+            JmxConnectionInfo updatedConnection = createRemoteConnection(
+                connectionInfo.id(), connectionInfo.name(), connectionInfo.url(),
+                connectionInfo.username(), connectionInfo.password(), connectionInfo.properties());
+            connectionRegistry.updateConnection(updatedConnection);
 
             connectionRegistry.setActiveConnection(connectionId);
             logger.info("Successfully connected to: {}", connectionId);
@@ -167,18 +173,30 @@ public class JMXConnectionManager {
     /**
      * Gets the current active MBean server connection.
      *
+     * If the registry has no active connection, or the active entry is marked as not
+     * connected (e.g. the registry was left in a stale state after an interrupted
+     * call), a single reconnect is attempted before giving up.
+     *
      * @return the MBean server connection
      * @throws IllegalStateException if not connected
      */
     public MBeanServerConnection getConnection() {
         Optional<JmxConnectionInfo> activeConnection = connectionRegistry.getActiveConnection();
+        if (activeConnection.isEmpty() || !activeConnection.get().isConnected()) {
+            logger.info("Active JMX connection missing or not connected - attempting one reconnect");
+            reconnect();
+            activeConnection = connectionRegistry.getActiveConnection();
+        }
+
         if (activeConnection.isEmpty()) {
-            throw new IllegalStateException("No active JMX connection available");
+            throw new IllegalStateException("No active JMX connection available - use discoverJmxServices(), "
+                + "addJmxConnection() or switchJmxConnection() to connect");
         }
 
         JmxConnectionInfo connectionInfo = activeConnection.get();
         if (!connectionInfo.isConnected()) {
-            throw new IllegalStateException("Active JMX connection is not connected");
+            throw new IllegalStateException("Active JMX connection is not connected (last error: "
+                + connectionInfo.errorMessage() + ") - use switchJmxConnection() to reconnect");
         }
 
         return connectionInfo.connection();
@@ -293,8 +311,13 @@ public class JMXConnectionManager {
                                 String url, String username, String password, Map<String, String> properties) {
         try {
             JmxConnectionInfo connectionInfo;
-            if (type == JmxConnectionProperties.ConnectionType.LOCAL) {
+            if (type == JmxConnectionProperties.ConnectionType.LOCAL && (url == null || url.isBlank())) {
                 connectionInfo = JmxConnectionInfo.createLocal(id, name);
+            } else if (type == JmxConnectionProperties.ConnectionType.LOCAL) {
+                // A LOCAL entry that carries a URL (e.g. a discovered local stub) is dialed as a remote
+                // connection - map it to REMOTE so connectToConnection treats it as dialable.
+                logger.info("Mapping LOCAL connection {} with URL {} to REMOTE", id, url);
+                connectionInfo = JmxConnectionInfo.createRemote(id, name, url, username, password, properties);
             } else {
                 connectionInfo = JmxConnectionInfo.createRemote(id, name, url, username, password, properties);
             }

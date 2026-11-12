@@ -1,11 +1,15 @@
 package org.jmxmcp.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jmxmcp.config.JmxConnectionProperties;
 import org.jmxmcp.config.JmxSecurityValidator;
 import org.jmxmcp.jmx.JMXConnectionManager;
 import org.jmxmcp.jmx.JmxConnectionInfo;
 import org.jmxmcp.jmx.JmxConnectionRegistry;
 import org.jmxmcp.jmx.MBeanDiscoveryService;
+import org.jmxmcp.model.JmxOperationResult;
 import org.jmxmcp.model.MBeanInfo;
 
 import org.slf4j.Logger;
@@ -14,8 +18,13 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Service;
 
 import javax.management.Attribute;
+import javax.management.InstanceNotFoundException;
+import javax.management.MBeanException;
 import javax.management.MBeanServerConnection;
+import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
+import javax.management.ReflectionException;
+import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -29,7 +38,22 @@ public class JmxService {
     private static final String SECURITY_VALIDATION_FAILED = "Security validation failed: ";
     private static final String ERROR_GETTING_ATTRIBUTE = "Error getting attribute: ";
     private static final String ERROR_SETTING_ATTRIBUTE = "Error setting attribute: ";
+    private static final String ERROR_INVOKING_OPERATION = "Error invoking operation: ";
 
+    /** Parameter types supported for operation invocation in v1 (String, primitives, wrappers). */
+    private static final Set<String> SUPPORTED_PARAMETER_TYPES = Set.of(
+        "boolean", "java.lang.Boolean",
+        "byte", "java.lang.Byte",
+        "short", "java.lang.Short",
+        "int", "java.lang.Integer",
+        "long", "java.lang.Long",
+        "float", "java.lang.Float",
+        "double", "java.lang.Double",
+        "char", "java.lang.Character",
+        "java.lang.String", "String"
+    );
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final MBeanDiscoveryService discoveryService;
     private final JMXConnectionManager connectionManager;
     private final JmxSecurityValidator securityValidator;
@@ -241,6 +265,181 @@ public class JmxService {
         }
     }
 
+    @Tool(description = "Invoke an operation on an MBean. arguments is a JSON array of string values, e.g. [\"2\"] for click(\"2\"). Returns the result or an error.")
+    public String invokeOperation(String objectName, String operationName, String arguments) {
+        long startTime = System.currentTimeMillis();
+        ObjectName objName;
+        try {
+            objName = new ObjectName(objectName);
+        } catch (MalformedObjectNameException e) {
+            logger.error("Invalid ObjectName: {}", objectName, e);
+            return ERROR_INVOKING_OPERATION + "Invalid ObjectName format - " + e.getMessage();
+        }
+
+        // Security validation (ObjectName, operation name and JSON arguments)
+        var objectNameValidation = securityValidator.validateObjectName(objName);
+        if (!objectNameValidation.isValid()) {
+            return SECURITY_VALIDATION_FAILED + objectNameValidation.getErrorMessage();
+        }
+        var operationValidation = securityValidator.validateOperation(objName, operationName, arguments);
+        if (!operationValidation.isValid()) {
+            return SECURITY_VALIDATION_FAILED + operationValidation.getErrorMessage();
+        }
+
+        // Parse arguments: a JSON array of string values, e.g. ["2"] for click("2")
+        List<String> args;
+        try {
+            args = parseOperationArguments(arguments);
+        } catch (IllegalArgumentException e) {
+            return ERROR_INVOKING_OPERATION + e.getMessage();
+        }
+
+        // Resolve the operation signature from the discovered MBean info
+        Optional<MBeanInfo> mbeanOpt = discoveryService.getMBean(objName);
+        if (mbeanOpt.isEmpty()) {
+            return ERROR_INVOKING_OPERATION + "MBean not found: " + objectName
+                + " (connect first via discoverJmxServices()/switchJmxConnection(), then listMBeans)";
+        }
+        MBeanInfo mbean = mbeanOpt.get();
+        List<MBeanInfo.MBeanOperationInfo> candidates = mbean.getOperations(operationName);
+        if (candidates.isEmpty()) {
+            return ERROR_INVOKING_OPERATION + "Operation '" + operationName + "' not found on " + objectName
+                + ". Available operations:\n" + formatOperationSignatures(mbean.operations());
+        }
+
+        // Select the overload whose parameter count matches the argument count
+        MBeanInfo.MBeanOperationInfo operation = candidates.stream()
+            .filter(op -> op.parameters().size() == args.size())
+            .findFirst()
+            .orElse(null);
+        if (operation == null) {
+            return ERROR_INVOKING_OPERATION + "No overload of '" + operationName + "' takes " + args.size()
+                + " argument(s). Available signatures:\n" + formatOperationSignatures(candidates);
+        }
+
+        // Convert each argument to the declared parameter type; v1 supports String/primitives/wrappers only
+        Object[] params = new Object[args.size()];
+        String[] signature = new String[args.size()];
+        for (int i = 0; i < args.size(); i++) {
+            MBeanInfo.MBeanParameterInfo parameter = operation.parameters().get(i);
+            String paramType = parameter.type();
+            if (!SUPPORTED_PARAMETER_TYPES.contains(paramType)) {
+                return ERROR_INVOKING_OPERATION + "Unsupported parameter type '" + paramType + "' for parameter '"
+                    + parameter.name() + "' of operation '" + operationName
+                    + "' (supported: String, primitives and their wrappers)";
+            }
+            try {
+                params[i] = convertStringToType(args.get(i), paramType);
+            } catch (RuntimeException e) {
+                return ERROR_INVOKING_OPERATION + "Invalid value '" + args.get(i) + "' for parameter '"
+                    + parameter.name() + "' of type " + paramType + " - " + e.getMessage();
+            }
+            signature[i] = paramType;
+        }
+
+        // Invoke the operation; on a connection failure, reconnect once and retry
+        try {
+            Object result = connectionManager.getConnection().invoke(objName, operationName, params, signature);
+            return formatSuccess(objName, operationName, result, startTime);
+        } catch (IOException e) {
+            logger.warn("Connection failed while invoking {}.{}, attempting one reconnect: {}",
+                objName, operationName, e.getMessage());
+            try {
+                connectionManager.reconnect();
+                Object result = connectionManager.getConnection().invoke(objName, operationName, params, signature);
+                return formatSuccess(objName, operationName, result, startTime);
+            } catch (IOException retryException) {
+                logger.error("Connection failed invoking operation after reconnect", retryException);
+                return ERROR_INVOKING_OPERATION + "Connection failed - try switchJmxConnection/reconnect - "
+                    + retryException.getMessage();
+            } catch (InstanceNotFoundException | MBeanException | ReflectionException | IllegalStateException retryException) {
+                return invocationError(objName, operationName, retryException, startTime);
+            }
+        } catch (InstanceNotFoundException | MBeanException | ReflectionException e) {
+            return invocationError(objName, operationName, e, startTime);
+        } catch (IllegalStateException e) {
+            logger.error("Connection state error invoking operation", e);
+            return ERROR_INVOKING_OPERATION + e.getMessage();
+        } catch (RuntimeException e) {
+            logger.error("Unexpected error invoking operation", e);
+            return ERROR_INVOKING_OPERATION + e.getMessage();
+        }
+    }
+
+    /**
+     * Formats a successful operation invocation via {@link JmxOperationResult}.
+     */
+    private String formatSuccess(ObjectName objName, String operationName, Object result, long startTime) {
+        long elapsed = System.currentTimeMillis() - startTime;
+        JmxOperationResult opResult = JmxOperationResult.success(objName, operationName, result, elapsed);
+        logger.info("Invoked {}.{} in {} ms", objName, operationName, elapsed);
+        return opResult.getFormattedResult() + String.format(" (executed in %d ms)", elapsed);
+    }
+
+    /**
+     * Maps an exception thrown by {@code MBeanServerConnection.invoke} to an error message.
+     * {@link MBeanException} is unwrapped so the real cause is reported.
+     */
+    private String invocationError(ObjectName objName, String operationName, Exception e, long startTime) {
+        long elapsed = System.currentTimeMillis() - startTime;
+        logger.error("Error invoking operation {}.{}", objName, operationName, e);
+        String message;
+        if (e instanceof MBeanException mbeanException && mbeanException.getCause() != null) {
+            Throwable cause = mbeanException.getCause();
+            message = cause.getClass().getSimpleName() + ": " + cause.getMessage();
+        } else {
+            message = e.getMessage();
+        }
+        JmxOperationResult failure = JmxOperationResult.failure(objName, operationName, message, elapsed);
+        logger.debug("Operation result: {}", failure.getFormattedResult());
+        return ERROR_INVOKING_OPERATION + message;
+    }
+
+    /**
+     * Parses the arguments string as a JSON array of string values, e.g. {@code ["2"]}.
+     * Scalar JSON values (string/number/boolean) are accepted and coerced to strings.
+     */
+    private List<String> parseOperationArguments(String arguments) {
+        if (arguments == null || arguments.isBlank()) {
+            return List.of();
+        }
+        JsonNode node;
+        try {
+            node = objectMapper.readTree(arguments);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException(
+                "Invalid JSON arguments (expected a JSON array of string values, e.g. [\"2\"]): " + e.getMessage());
+        }
+        if (!node.isArray()) {
+            throw new IllegalArgumentException(
+                "Arguments must be a JSON array of string values, e.g. [\"2\"] for click(\"2\") - got "
+                    + node.getNodeType());
+        }
+        List<String> args = new ArrayList<>(node.size());
+        for (int i = 0; i < node.size(); i++) {
+            JsonNode element = node.get(i);
+            if (element.isTextual() || element.isNumber() || element.isBoolean()) {
+                args.add(element.asText());
+            } else {
+                throw new IllegalArgumentException(
+                    "Argument at index " + i + " must be a string value, e.g. [\"2\"] - got " + element.getNodeType());
+            }
+        }
+        return args;
+    }
+
+    /**
+     * Formats operation signatures for error messages, one per line.
+     */
+    private String formatOperationSignatures(List<MBeanInfo.MBeanOperationInfo> operations) {
+        return operations.stream()
+            .map(op -> "  " + op.name() + "(" + op.parameters().stream()
+                .map(p -> p.type() + " " + p.name())
+                .collect(Collectors.joining(", ")) + ") : " + op.returnType()
+                + " [impact: " + op.getImpactString() + "]")
+            .collect(Collectors.joining("\n"));
+    }
+
     @Tool(description = "List all MBean domains")
     public String listDomains() {
         try {
@@ -347,6 +546,9 @@ public class JmxService {
 
             boolean success = connectionManager.connectToConnection(connectionId);
             if (success) {
+                // Refresh the MBean cache for the newly active connection so listMBeans/getMBeanInfo
+                // work immediately instead of waiting for the next scheduled discovery
+                discoveryService.discoverMBeans();
                 Optional<JmxConnectionInfo> connection = registry.getConnection(connectionId);
                 String name = connection.map(JmxConnectionInfo::name).orElse(connectionId);
                 return "Successfully switched to JMX connection: " + name + " (" + connectionId + ")";
@@ -426,12 +628,18 @@ public class JmxService {
         }
     }
 
-    @Tool(description = "Add a new JMX connection manually")
+    @Tool(description = "Add a new JMX connection manually. type is LOCAL or REMOTE (a LOCAL entry with a url, e.g. a discovered local stub, is dialed as REMOTE). Prefer remote JNDI registry URLs such as service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi - local stub URLs (service:jmx:rmi://.../stub/...) can fail with RemoteStub serialVersionUID mismatches when the JVMs differ. Note: remote JMX with authenticate=false is trusted-network-only.")
     public String addJmxConnection(String id, String name, String type, String url, String username, String password) {
         try {
             JmxConnectionProperties.ConnectionType connectionType = parseConnectionType(type);
             if (connectionType == null) {
                 return "Invalid connection type: " + type + ". Must be LOCAL or REMOTE.";
+            }
+            if (connectionType == JmxConnectionProperties.ConnectionType.LOCAL
+                    && (url == null || url.isBlank())) {
+                return "LOCAL connections without a JMX service URL cannot be dialed. Use discoverJmxServices() "
+                    + "to find local processes, or add a REMOTE connection with a JNDI registry URL like "
+                    + "service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi";
             }
 
             Map<String, String> properties = new HashMap<>();

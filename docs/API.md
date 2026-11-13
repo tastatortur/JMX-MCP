@@ -323,28 +323,19 @@ The server automatically handles conversion between JSON and Java types:
 | `long`, `Long` | `number` | `1234567890` |
 | `boolean`, `Boolean` | `boolean` | `true` |
 | `double`, `Double` | `number` | `3.14159` |
-| `CompositeData` | `object` | `{"key": "value"}` |
-| `TabularData` | `array` | `[{"row1": "data"}]` |
+| `CompositeData` | text | `{committed=536870912, max=8589934592, used=245760000}` |
+| `TabularData` (key/value rows) | text | `{java.version=17.0.1, os.name=Mac OS X}` |
+| `TabularData` (other rows) | text | `[{id=1, name=one}, {id=2, name=two}]` |
+| Arrays / collections | text | `[-Xmx512m, -Dfoo=bar]` |
 
 ### Complex Types
 
-**CompositeData** (e.g., MemoryUsage):
-```json
-{
-  "committed": 536870912,
-  "init": 268435456, 
-  "max": 8589934592,
-  "used": 245760000
-}
-```
+`getAttribute` and `invokeOperation` render complex values as compact text rather than JSON or `toString()`:
 
-**TabularData** (e.g., System Properties):
-```json
-[
-  {"key": "java.version", "value": "17.0.1"},
-  {"key": "os.name", "value": "Mac OS X"}
-]
-```
+- `CompositeData` becomes `{item=value, ...}`; nested composites are nested in braces.
+- `TabularData` whose rows are `key`/`value` pairs (e.g. `Runtime.SystemProperties`) becomes a map `{key=value, ...}`; other tables become a list of row composites.
+- Arrays (including primitive arrays), collections and maps are expanded element by element.
+- At most 100 elements are rendered per array, collection or table; the rest is summarised as `... (N more)`.
 
 ## Security Considerations
 

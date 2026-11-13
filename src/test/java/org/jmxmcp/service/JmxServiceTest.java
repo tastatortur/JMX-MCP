@@ -16,6 +16,11 @@ import javax.management.MBeanException;
 import javax.management.MBeanServerConnection;
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
+import javax.management.openmbean.CompositeData;
+import javax.management.openmbean.CompositeDataSupport;
+import javax.management.openmbean.CompositeType;
+import javax.management.openmbean.OpenType;
+import javax.management.openmbean.SimpleType;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -457,6 +462,81 @@ class JmxServiceTest {
                 javax.management.MBeanOperationInfo.ACTION));
         }
         return new MBeanInfo(new ObjectName(UI_MBEAN), "Cls", "d", List.of(), ops, List.of());
+    }
+
+    @Test
+    void invokeOperation_withInvalidNumberAndUnsupportedOverload_shouldReportConversionError() throws Exception {
+        // Given: get(long[]) is listed first, but the useful error is that "abc" is not a long
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("get", "[J", "long")));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "get", "[\"abc\"]");
+
+        // Then
+        assertThat(result)
+            .contains("Invalid value 'abc'")
+            .contains("of type long")
+            .doesNotContain("Unsupported parameter type");
+    }
+
+    @Test
+    void invokeOperation_withOnlyUnsupportedOverloads_shouldReportUnsupportedType() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("get", "[J", "[I")));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "get", "[\"1\"]");
+
+        // Then
+        assertThat(result).contains("Unsupported parameter type '[J'");
+    }
+
+    @Test
+    void invokeOperation_withSeveralConversionErrors_shouldReportTheFirstOverload() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("set", "int", "long")));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "set", "[\"abc\"]");
+
+        // Then
+        assertThat(result).contains("Invalid value 'abc'").contains("of type int");
+    }
+
+    @Test
+    void getAttribute_withStringArray_shouldListElements() throws Exception {
+        // Given
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.getAttribute(any(ObjectName.class), eq("InputArguments")))
+            .thenReturn(new String[]{"-Xmx512m", "-Dfoo=bar"});
+
+        // When
+        String result = jmxService.getAttribute("java.lang:type=Runtime", "InputArguments");
+
+        // Then
+        assertThat(result).isEqualTo("Attribute 'InputArguments' = [-Xmx512m, -Dfoo=bar] (type: String[])");
+    }
+
+    @Test
+    void invokeOperation_withCompositeResult_shouldRenderItemsWithoutTypeMetadata() throws Exception {
+        // Given
+        CompositeType type = new CompositeType("Usage", "d", new String[]{"max", "used"},
+            new String[]{"max", "used"}, new OpenType<?>[]{SimpleType.LONG, SimpleType.LONG});
+        CompositeData usage = new CompositeDataSupport(type, new String[]{"max", "used"}, new Object[]{100L, 42L});
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("click"), any(), any())).thenReturn(usage);
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"1\"]");
+
+        // Then
+        assertThat(result)
+            .contains("Result (CompositeDataSupport): {max=100, used=42}")
+            .doesNotContain("CompositeType");
     }
 
     @Test

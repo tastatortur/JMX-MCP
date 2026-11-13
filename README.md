@@ -1,11 +1,13 @@
 # JMX MCP Server
 
 [![Java](https://img.shields.io/badge/Java-17+-orange.svg)](https://openjdk.java.net/)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4.1-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.16-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![MCP](https://img.shields.io/badge/MCP-2024--11--05-blue.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A powerful **Model Context Protocol (MCP) server** that provides comprehensive JMX monitoring and management capabilities for AI assistants like Claude Desktop. Monitor Java applications, manage MBeans, and perform JMX operations through natural language interactions.
+
+> This project is a fork of [itz4blitz/JMX-MCP](https://github.com/itz4blitz/JMX-MCP). Many thanks to its author for the solid foundation that made this version possible.
 
 ## 🎥 Demo Video
 
@@ -51,7 +53,7 @@ https://github.com/user-attachments/assets/722e1885-5aeb-4584-8116-b93324e0abc1
 ### 1. Clone and Build
 
 ```bash
-git clone https://github.com/itz4blitz/JMX-MCP.git
+git clone https://github.com/tastatortur/JMX-MCP.git
 cd JMX-MCP
 mvn clean package
 ```
@@ -185,15 +187,16 @@ The application is running efficiently with low memory pressure.
 User: "Are there any performance issues?"
 Claude: Let me analyze the JMX performance metrics.
 
-[Uses multiple tools to check GC, threads, and memory]
+[Uses getJvmOverview for memory, GC, thread counts and CPU, then getThreadDump to look closer]
 
 Performance analysis:
 ✅ Memory: Healthy (12% heap usage)
 ✅ GC: Efficient (avg 15ms collection time)
-⚠️  Threads: High count (245 threads) - consider investigation
+⚠️  Threads: High count (245 threads) - 180 are WAITING in the same pool
 ✅ CPU: Normal load
+✅ Deadlocks: none
 
-Recommendation: Monitor thread creation patterns.
+Recommendation: Check why the worker pool keeps growing.
 ```
 
 ## 🏗️ Architecture
@@ -213,7 +216,10 @@ Recommendation: Monitor thread creation patterns.
 
 - **JMXConnectionManager**: Manages local and remote JMX connections
 - **MBeanDiscoveryService**: Discovers and catalogs available MBeans
-- **JmxService**: Provides @Tool-annotated methods for AI interaction
+- **JmxService**: Provides @Tool-annotated methods for MBean access, operations and connection management
+- **JvmDiagnosticsService**: Provides `getJvmOverview` and `getThreadDump`, built on the standard platform MBeans
+- **JmxValueFormatter**: Renders arrays, composite and tabular values as compact readable text
+- **ConnectionRetry**: Re-dials a dead connection and repeats a read once (writes are never retried)
 - **JMXToMCPMapper**: Maps JMX attributes to MCP resources
 - **JmxSecurityValidator**: Validates operations for security compliance
 
@@ -376,12 +382,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Model Context Protocol** for the standardized AI integration protocol
 - **Anthropic** for Claude Desktop and AI assistant capabilities
 - **OpenJDK Community** for the robust Java platform
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/itz4blitz/JMX-MCP/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/itz4blitz/JMX-MCP/discussions)
-- **Documentation**: [Wiki](https://github.com/itz4blitz/JMX-MCP/wiki)
 
 ---
 

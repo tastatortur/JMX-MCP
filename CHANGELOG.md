@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `getThreadDump` MCP tool: compact thread dump (`at Class.method(File.java:123)` frames, waiting-on lock and its owner, held monitors and synchronizers) with deadlocked threads reported first; optional `maxFrames` (default 20, max 200), `threadNameFilter` and `state` parameters, capped at 100 threads; the parameters are advertised as optional in the tool schema
 
 ### Changed
+- Optional tool parameters (`listMBeans` domain, `invokeOperation` arguments, `addJmxConnection` username and password) are now advertised as optional in the tool schema; previously clients were required to supply them
 - `getAttribute` and `invokeOperation` render arrays, collections, maps, `CompositeData` and `TabularData` as compact readable text (e.g. `[-Xmx512m, -Dfoo=bar]`, `{committed=..., used=...}`) instead of `toString()` with repeated type metadata or `[Ljava.lang.String;@...`; key/value tables render as maps, output is capped at 100 elements per array, collection or table
 - `invokeOperation` reports a failed value conversion (e.g. `"abc"` for a `long` parameter) instead of an unrelated "unsupported parameter type" error from another overload
 

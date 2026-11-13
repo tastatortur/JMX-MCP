@@ -646,4 +646,21 @@ class JmxServiceTest {
             throw new RuntimeException(e);
         }
     }
+
+    @Test
+    void toolSchemas_shouldOnlyRequireMandatoryParameters() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var required = new java.util.HashMap<String, List<String>>();
+        for (var callback : org.springframework.ai.support.ToolCallbacks.from(jmxService)) {
+            var names = new ArrayList<String>();
+            mapper.readTree(callback.getToolDefinition().inputSchema()).path("required")
+                .forEach(node -> names.add(node.asText()));
+            required.put(callback.getToolDefinition().name(), names);
+        }
+
+        assertThat(required.get("listMBeans")).isEmpty();
+        assertThat(required.get("invokeOperation")).containsExactlyInAnyOrder("objectName", "operationName");
+        assertThat(required.get("addJmxConnection")).containsExactlyInAnyOrder("id", "name", "type", "url");
+        assertThat(required.get("getAttribute")).containsExactlyInAnyOrder("objectName", "attributeName");
+    }
 }

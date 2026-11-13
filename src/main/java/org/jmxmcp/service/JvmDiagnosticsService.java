@@ -1,5 +1,6 @@
 package org.jmxmcp.service;
 
+import org.jmxmcp.jmx.ConnectionRetry;
 import org.jmxmcp.jmx.JMXConnectionManager;
 import org.jmxmcp.model.JmxValueFormatter;
 import org.slf4j.Logger;
@@ -59,7 +60,7 @@ public class JvmDiagnosticsService {
     private static final int MAX_ARGUMENT_LENGTH = 200;
 
     /** JVM arguments whose name suggests a credential; their value is masked in the overview. */
-    private static final Pattern SENSITIVE_ARGUMENT = Pattern.compile("(?i)pass|secret|token|key|credential|auth");
+    private static final Pattern SENSITIVE_ARGUMENT = Pattern.compile("(?i)pass|secret|token|key|credential|authorization");
 
     private static final double MEGABYTE = 1024.0 * 1024.0;
 
@@ -74,20 +75,23 @@ public class JvmDiagnosticsService {
         + "memory pool usage, thread counts, loaded classes, and OS CPU load and physical memory. Read-only.")
     public String getJvmOverview() {
         try {
-            MBeanServerConnection connection = connectionManager.getConnection();
-            StringBuilder sb = new StringBuilder("JVM Overview\n============\n");
-            section(sb, "Runtime", () -> runtime(connection));
-            section(sb, "Memory", () -> memory(connection));
-            section(sb, "Garbage collection", () -> garbageCollectors(connection));
-            section(sb, "Memory pools", () -> memoryPools(connection));
-            section(sb, "Threads", () -> threads(connection));
-            section(sb, "Classes", () -> classes(connection));
-            section(sb, "Operating system", () -> operatingSystem(connection));
-            return sb.toString();
-        } catch (RuntimeException e) {
+            return ConnectionRetry.read(connectionManager, this::overview);
+        } catch (Exception e) {
             logger.error("Error getting JVM overview", e);
             return "Error getting JVM overview: " + describe(e);
         }
+    }
+
+    private String overview(MBeanServerConnection connection) throws Exception {
+        StringBuilder sb = new StringBuilder("JVM Overview\n============\n");
+        section(sb, "Runtime", () -> runtime(connection));
+        section(sb, "Memory", () -> memory(connection));
+        section(sb, "Garbage collection", () -> garbageCollectors(connection));
+        section(sb, "Memory pools", () -> memoryPools(connection));
+        section(sb, "Threads", () -> threads(connection));
+        section(sb, "Classes", () -> classes(connection));
+        section(sb, "Operating system", () -> operatingSystem(connection));
+        return sb.toString();
     }
 
     @Tool(description = "Get a formatted thread dump of the connected JVM: per thread its name, state, the lock it "
@@ -115,13 +119,15 @@ public class JvmDiagnosticsService {
         }
 
         try {
-            MBeanServerConnection connection = connectionManager.getConnection();
-            ThreadMXBean threading = ManagementFactory.newPlatformMXBeanProxy(
-                connection, ManagementFactory.THREAD_MXBEAN_NAME, ThreadMXBean.class);
-            ThreadInfo[] infos = threading.dumpAllThreads(true, true);
-            long[] deadlocked = threading.findDeadlockedThreads();
-            return formatThreadDump(infos, deadlocked, frameLimit, threadNameFilter, stateFilter);
-        } catch (IOException | RuntimeException e) {
+            Thread.State finalStateFilter = stateFilter;
+            return ConnectionRetry.read(connectionManager, connection -> {
+                ThreadMXBean threading = ManagementFactory.newPlatformMXBeanProxy(
+                    connection, ManagementFactory.THREAD_MXBEAN_NAME, ThreadMXBean.class);
+                ThreadInfo[] infos = threading.dumpAllThreads(true, true);
+                long[] deadlocked = threading.findDeadlockedThreads();
+                return formatThreadDump(infos, deadlocked, frameLimit, threadNameFilter, finalStateFilter);
+            });
+        } catch (Exception e) {
             // The MXBean proxy wraps IOExceptions of a dead connection in UndeclaredThrowableException
             logger.error("Error getting thread dump", e);
             return "Error getting thread dump: " + describe(e);
@@ -223,11 +229,15 @@ public class JvmDiagnosticsService {
         String render() throws Exception;
     }
 
-    private static void section(StringBuilder sb, String title, SectionBody body) {
+    private static void section(StringBuilder sb, String title, SectionBody body) throws Exception {
         sb.append('\n').append(title).append(":\n");
         try {
             sb.append(body.render());
         } catch (Exception e) {
+            if (ConnectionRetry.isConnectionFailure(e)) {
+                // A dead connection fails every section the same way: let the caller re-dial or report it once
+                throw e;
+            }
             // One unsupported MBean (e.g. on a non-HotSpot JVM) must not hide the rest of the overview
             sb.append("  unavailable: ").append(describe(e)).append('\n');
         }

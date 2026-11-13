@@ -63,6 +63,18 @@ class JvmDiagnosticsServiceTest {
     }
 
     @Test
+    void getJvmOverview_withDeadConnection_shouldReportOneConnectionError() throws Exception {
+        MBeanServerConnection connection = org.mockito.Mockito.mock(MBeanServerConnection.class);
+        when(connection.getAttribute(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString()))
+            .thenThrow(new IOException("connection reset"));
+        when(connectionManager.getConnection()).thenReturn(connection);
+
+        String result = service.getJvmOverview();
+
+        assertThat(result).isEqualTo("Error getting JVM overview: Connection failed - connection reset");
+    }
+
+    @Test
     void getJvmOverview_withoutConnection_shouldReturnError() {
         when(connectionManager.getConnection()).thenThrow(new IllegalStateException("No active JMX connection"));
 
@@ -223,6 +235,8 @@ class JvmDiagnosticsServiceTest {
             .isEqualTo("-Djavax.net.ssl.keyStorePassword=****");
         assertThat(JvmDiagnosticsService.maskArgument("-Xmx512m")).isEqualTo("-Xmx512m");
         assertThat(JvmDiagnosticsService.maskArgument("-Dfile.encoding=UTF-8")).isEqualTo("-Dfile.encoding=UTF-8");
+        assertThat(JvmDiagnosticsService.maskArgument("-Dcom.sun.management.jmxremote.authenticate=false"))
+            .isEqualTo("-Dcom.sun.management.jmxremote.authenticate=false");
         assertThat(JvmDiagnosticsService.maskArgument("-Dpath=" + "x".repeat(300)))
             .hasSize(203).endsWith("...");
     }

@@ -1,7 +1,7 @@
 # JMX MCP Server
 
 [![Java](https://img.shields.io/badge/Java-17+-orange.svg)](https://openjdk.java.net/)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4.1-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.16-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![MCP](https://img.shields.io/badge/MCP-2024--11--05-blue.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -185,15 +185,16 @@ The application is running efficiently with low memory pressure.
 User: "Are there any performance issues?"
 Claude: Let me analyze the JMX performance metrics.
 
-[Uses multiple tools to check GC, threads, and memory]
+[Uses getJvmOverview for memory, GC, thread counts and CPU, then getThreadDump to look closer]
 
 Performance analysis:
 ✅ Memory: Healthy (12% heap usage)
 ✅ GC: Efficient (avg 15ms collection time)
-⚠️  Threads: High count (245 threads) - consider investigation
+⚠️  Threads: High count (245 threads) - 180 are WAITING in the same pool
 ✅ CPU: Normal load
+✅ Deadlocks: none
 
-Recommendation: Monitor thread creation patterns.
+Recommendation: Check why the worker pool keeps growing.
 ```
 
 ## 🏗️ Architecture
@@ -213,7 +214,10 @@ Recommendation: Monitor thread creation patterns.
 
 - **JMXConnectionManager**: Manages local and remote JMX connections
 - **MBeanDiscoveryService**: Discovers and catalogs available MBeans
-- **JmxService**: Provides @Tool-annotated methods for AI interaction
+- **JmxService**: Provides @Tool-annotated methods for MBean access, operations and connection management
+- **JvmDiagnosticsService**: Provides `getJvmOverview` and `getThreadDump`, built on the standard platform MBeans
+- **JmxValueFormatter**: Renders arrays, composite and tabular values as compact readable text
+- **ConnectionRetry**: Re-dials a dead connection and repeats a read once (writes are never retried)
 - **JMXToMCPMapper**: Maps JMX attributes to MCP resources
 - **JmxSecurityValidator**: Validates operations for security compliance
 

@@ -103,6 +103,6 @@ public record JmxOperationResult(
             return "Operation completed successfully (void return)";
         }
 
-        return String.format("Result (%s): %s", resultType, result);
+        return String.format("Result (%s): %s", resultType, JmxValueFormatter.format(result));
     }
 }

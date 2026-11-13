@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Connection robustness: bare `LOCAL` connections without a URL now fail with guidance to use `discoverJmxServices()` or a remote JNDI registry URL (`service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi`); `LOCAL` entries carrying a URL are dialed as `REMOTE`; `getConnection()` re-establishes a stale active connection (serialized, rate-limited to one attempt per 5 s) before failing; re-dialing closes the previous connector; `switchJmxConnection` refreshes the MBean cache immediately after a successful switch
 - Documentation: remote JNDI registry URLs documented as the reliable path (local stub URLs can fail with `RemoteStub` serialVersionUID mismatches across JVMs); `authenticate=false` remote JMX documented as trusted-network-only
 
+### Changed
+- `getAttribute` and `invokeOperation` render arrays, collections, maps, `CompositeData` and `TabularData` as compact readable text (e.g. `[-Xmx512m, -Dfoo=bar]`, `{committed=..., used=...}`) instead of `toString()` with repeated type metadata or `[Ljava.lang.String;@...`; key/value tables render as maps, output is capped at 100 elements per array, collection or table
+- `invokeOperation` reports a failed value conversion (e.g. `"abc"` for a `long` parameter) instead of an unrelated "unsupported parameter type" error from another overload
+
 ## [1.0.0] - 2025-06-21
 
 ### Added

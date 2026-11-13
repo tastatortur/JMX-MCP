@@ -12,6 +12,7 @@ import org.jmxmcp.jmx.JmxConnectionInfo;
 import org.jmxmcp.jmx.JmxConnectionRegistry;
 import org.jmxmcp.jmx.MBeanDiscoveryService;
 import org.jmxmcp.model.JmxOperationResult;
+import org.jmxmcp.model.JmxValueFormatter;
 import org.jmxmcp.model.MBeanInfo;
 
 import org.slf4j.Logger;
@@ -41,6 +42,8 @@ public class JmxService {
     private static final String ERROR_GETTING_ATTRIBUTE = "Error getting attribute: ";
     private static final String ERROR_SETTING_ATTRIBUTE = "Error setting attribute: ";
     private static final String ERROR_INVOKING_OPERATION = "Error invoking operation: ";
+
+    private static final String UNSUPPORTED_PARAMETER_TYPE = "Unsupported parameter type";
 
     private static final Set<String> PRIMITIVE_PARAMETER_TYPES = Set.of(
         "boolean", "byte", "short", "int", "long", "float", "double", "char");
@@ -192,8 +195,8 @@ public class JmxService {
             MBeanServerConnection connection = connectionManager.getConnection();
             Object value = connection.getAttribute(objName, attributeName);
             
-            return "Attribute '" + attributeName + "' = " + 
-                   (value != null ? value.toString() : "null") +
+            return "Attribute '" + attributeName + "' = " +
+                   JmxValueFormatter.format(value) +
                    " (type: " + (value != null ? value.getClass().getSimpleName() : "null") + ")";
                    
         } catch (javax.management.MalformedObjectNameException e) {
@@ -331,7 +334,10 @@ public class JmxService {
         }
         Object[] params = null;
         String[] signature = null;
-        String firstError = null;
+        // Report a conversion error from a supported overload in preference to an unsupported-type error from
+        // another one, e.g. "abc" is not a long rather than "unsupported parameter type [J"
+        String conversionError = null;
+        String unsupportedError = null;
         for (MBeanInfo.MBeanOperationInfo operation : sameArity) {
             Object[] convertedParams = new Object[args.size()];
             String[] convertedSignature = new String[args.size()];
@@ -341,12 +347,16 @@ public class JmxService {
                 signature = convertedSignature;
                 break;
             }
-            if (firstError == null) {
-                firstError = error;
+            if (error.startsWith(UNSUPPORTED_PARAMETER_TYPE)) {
+                if (unsupportedError == null) {
+                    unsupportedError = error;
+                }
+            } else if (conversionError == null) {
+                conversionError = error;
             }
         }
         if (params == null) {
-            return ERROR_INVOKING_OPERATION + firstError;
+            return ERROR_INVOKING_OPERATION + (conversionError != null ? conversionError : unsupportedError);
         }
 
         // Invoke the operation. A connection failure is NOT retried: the target may already have executed
@@ -382,7 +392,7 @@ public class JmxService {
             MBeanInfo.MBeanParameterInfo parameter = operation.parameters().get(i);
             String paramType = parameter.type();
             if (!SUPPORTED_PARAMETER_TYPES.contains(paramType)) {
-                return "Unsupported parameter type '" + paramType + "' for parameter '"
+                return UNSUPPORTED_PARAMETER_TYPE + " '" + paramType + "' for parameter '"
                     + parameter.name() + "' of operation '" + operationName
                     + "' (supported: String, primitives and their wrappers)";
             }

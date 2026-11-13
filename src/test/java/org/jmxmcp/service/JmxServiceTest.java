@@ -17,6 +17,7 @@ import javax.management.MBeanServerConnection;
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -367,39 +369,177 @@ class JmxServiceTest {
     }
 
     @Test
-    void invokeOperation_withIoException_shouldReconnectAndRetryOnce() throws Exception {
+    void invokeOperation_withIoException_shouldNotRetryAndShouldReconnect() throws Exception {
         // Given
         when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
         when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
         when(mbeanServerConnection.invoke(any(ObjectName.class), eq("click"), any(), any()))
-            .thenThrow(new IOException("connection reset"))
-            .thenReturn("clicked after reconnect");
+            .thenThrow(new IOException("connection reset"));
 
         // When
         String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"2\"]");
 
-        // Then
-        assertThat(result).contains("Result (String): clicked after reconnect");
+        // Then: the operation is invoked exactly once (it may have run on the target already)
+        assertThat(result)
+            .contains("Error invoking operation:")
+            .contains("Connection failed")
+            .contains("not retried");
+        verify(mbeanServerConnection, times(1)).invoke(any(ObjectName.class), eq("click"), any(), any());
         verify(connectionManager).reconnect();
     }
 
     @Test
-    void invokeOperation_withPersistentIoException_shouldReturnConnectionError() throws Exception {
+    void invokeOperation_withOverloadsOfSameArity_shouldPickConvertibleOne() throws Exception {
+        // Given: set(int) is listed first but "abc" is not an int, so set(String) must be chosen
+        MBeanInfo mbean = new MBeanInfo(
+            new ObjectName(UI_MBEAN), "Cls", "d", List.of(),
+            List.of(
+                new MBeanInfo.MBeanOperationInfo("set", "d", "void",
+                    List.of(new MBeanInfo.MBeanParameterInfo("v", "int", "")),
+                    javax.management.MBeanOperationInfo.ACTION),
+                new MBeanInfo.MBeanOperationInfo("set", "d", "void",
+                    List.of(new MBeanInfo.MBeanParameterInfo("v", "java.lang.String", "")),
+                    javax.management.MBeanOperationInfo.ACTION)),
+            List.of());
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(mbean));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("set"),
+            eq(new Object[]{"abc"}), eq(new String[]{"java.lang.String"}))).thenReturn("ok");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "set", "[\"abc\"]");
+
+        // Then
+        assertThat(result).contains("Result (String): ok");
+    }
+
+    @Test
+    void invokeOperation_withExponentNumber_shouldConvertToIntegralString() throws Exception {
+        // Given
+        MBeanInfo mbean = new MBeanInfo(
+            new ObjectName(UI_MBEAN), "Cls", "d", List.of(),
+            List.of(new MBeanInfo.MBeanOperationInfo("wait", "d", "void",
+                List.of(new MBeanInfo.MBeanParameterInfo("ms", "int", "")),
+                javax.management.MBeanOperationInfo.ACTION)),
+            List.of());
+        when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(mbean));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("wait"),
+            eq(new Object[]{1000}), eq(new String[]{"int"}))).thenReturn("done");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "wait", "[1e3]");
+
+        // Then
+        assertThat(result).contains("Result (String): done");
+    }
+
+    @Test
+    void invokeOperation_withNullArgumentForString_shouldPassNull() throws Exception {
         // Given
         when(discoveryService.getMBean(any(ObjectName.class))).thenReturn(Optional.of(createUiMBeanInfo()));
         when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
-        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("click"), any(), any()))
-            .thenThrow(new IOException("connection refused"));
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("click"),
+            eq(new Object[]{null}), eq(new String[]{"java.lang.String"}))).thenReturn("null clicked");
 
         // When
-        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"2\"]");
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[null]");
 
         // Then
-        assertThat(result)
-            .contains("Error invoking operation:")
-            .contains("Connection failed")
-            .contains("switchJmxConnection");
-        verify(connectionManager).reconnect();
+        assertThat(result).contains("Result (String): null clicked");
+    }
+
+    private MBeanInfo mbeanWithOverloads(String op, String... paramTypes) throws Exception {
+        List<MBeanInfo.MBeanOperationInfo> ops = new ArrayList<>();
+        for (String type : paramTypes) {
+            ops.add(new MBeanInfo.MBeanOperationInfo(op, "d", "void",
+                List.of(new MBeanInfo.MBeanParameterInfo("v", type, "")),
+                javax.management.MBeanOperationInfo.ACTION));
+        }
+        return new MBeanInfo(new ObjectName(UI_MBEAN), "Cls", "d", List.of(), ops, List.of());
+    }
+
+    @Test
+    void invokeOperation_withBooleanListedBeforeInt_shouldPickIntForNumericArgument() throws Exception {
+        // Given: "5" is not a valid boolean, so set(int) must win even though set(boolean) is listed first
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("set", "boolean", "int")));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("set"),
+            eq(new Object[]{5}), eq(new String[]{"int"}))).thenReturn("int chosen");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "set", "[5]");
+
+        // Then
+        assertThat(result).contains("Result (String): int chosen");
+    }
+
+    @Test
+    void invokeOperation_withStringListedBeforeInt_shouldPreferIntForNumericArgument() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("set", "java.lang.String", "int")));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("set"),
+            eq(new Object[]{5}), eq(new String[]{"int"}))).thenReturn("int chosen");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "set", "[5]");
+
+        // Then
+        assertThat(result).contains("Result (String): int chosen");
+    }
+
+    @Test
+    void invokeOperation_withInvalidBooleanValue_shouldReturnError() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("set", "boolean")));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "set", "[\"yes\"]");
+
+        // Then
+        assertThat(result).contains("Error invoking operation:").contains("expected true or false");
+    }
+
+    @Test
+    void invokeOperation_withNullForPrimitive_shouldFallThroughToStringOverload() throws Exception {
+        // Given: null cannot go to int, so the String overload is used
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("set", "int", "java.lang.String")));
+        when(connectionManager.getConnection()).thenReturn(mbeanServerConnection);
+        when(mbeanServerConnection.invoke(any(ObjectName.class), eq("set"),
+            eq(new Object[]{null}), eq(new String[]{"java.lang.String"}))).thenReturn("string chosen");
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "set", "[null]");
+
+        // Then
+        assertThat(result).contains("Result (String): string chosen");
+    }
+
+    @Test
+    void invokeOperation_withNullForOnlyPrimitiveOverload_shouldReturnError() throws Exception {
+        // Given
+        when(discoveryService.getMBean(any(ObjectName.class)))
+            .thenReturn(Optional.of(mbeanWithOverloads("set", "int")));
+
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "set", "[null]");
+
+        // Then
+        assertThat(result).contains("Error invoking operation:").contains("Null is not allowed for primitive");
+    }
+
+    @Test
+    void invokeOperation_withTrailingGarbageAfterArray_shouldReturnError() {
+        // When
+        String result = jmxService.invokeOperation(UI_MBEAN, "click", "[\"1\"] xyz");
+
+        // Then
+        assertThat(result).contains("Error invoking operation:").contains("Invalid JSON arguments");
     }
 
     private MBeanInfo createMockMBeanInfo(String objectNameStr) {

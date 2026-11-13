@@ -1,8 +1,10 @@
 package org.jmxmcp.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import org.jmxmcp.config.JmxConnectionProperties;
 import org.jmxmcp.config.JmxSecurityValidator;
 import org.jmxmcp.jmx.JMXConnectionManager;
@@ -40,6 +42,9 @@ public class JmxService {
     private static final String ERROR_SETTING_ATTRIBUTE = "Error setting attribute: ";
     private static final String ERROR_INVOKING_OPERATION = "Error invoking operation: ";
 
+    private static final Set<String> PRIMITIVE_PARAMETER_TYPES = Set.of(
+        "boolean", "byte", "short", "int", "long", "float", "double", "char");
+
     /** Parameter types supported for operation invocation in v1 (String, primitives, wrappers). */
     private static final Set<String> SUPPORTED_PARAMETER_TYPES = Set.of(
         "boolean", "java.lang.Boolean",
@@ -53,7 +58,11 @@ public class JmxService {
         "java.lang.String", "String"
     );
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    /** Stateless parser for operation arguments; rejects trailing tokens such as {@code ["1"] xyz}. */
+    private static final ObjectReader ARGUMENT_READER = new ObjectMapper()
+        .readerFor(JsonNode.class)
+        .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
     private final MBeanDiscoveryService discoveryService;
     private final JMXConnectionManager connectionManager;
     private final JmxSecurityValidator securityValidator;
@@ -307,56 +316,52 @@ public class JmxService {
                 + ". Available operations:\n" + formatOperationSignatures(mbean.operations());
         }
 
-        // Select the overload whose parameter count matches the argument count
-        MBeanInfo.MBeanOperationInfo operation = candidates.stream()
+        // Select the first overload whose parameter count matches AND whose parameter types can be
+        // converted from the supplied arguments; v1 supports String/primitives/wrappers only
+        List<MBeanInfo.MBeanOperationInfo> sameArity = candidates.stream()
             .filter(op -> op.parameters().size() == args.size())
-            .findFirst()
-            .orElse(null);
-        if (operation == null) {
+            // String parameters accept anything, so try overloads with fewer String parameters first
+            // (stable sort keeps the reported order otherwise)
+            .sorted(Comparator.comparingLong(op -> op.parameters().stream()
+                .filter(p -> p.type().equals("java.lang.String") || p.type().equals("String")).count()))
+            .toList();
+        if (sameArity.isEmpty()) {
             return ERROR_INVOKING_OPERATION + "No overload of '" + operationName + "' takes " + args.size()
                 + " argument(s). Available signatures:\n" + formatOperationSignatures(candidates);
         }
-
-        // Convert each argument to the declared parameter type; v1 supports String/primitives/wrappers only
-        Object[] params = new Object[args.size()];
-        String[] signature = new String[args.size()];
-        for (int i = 0; i < args.size(); i++) {
-            MBeanInfo.MBeanParameterInfo parameter = operation.parameters().get(i);
-            String paramType = parameter.type();
-            if (!SUPPORTED_PARAMETER_TYPES.contains(paramType)) {
-                return ERROR_INVOKING_OPERATION + "Unsupported parameter type '" + paramType + "' for parameter '"
-                    + parameter.name() + "' of operation '" + operationName
-                    + "' (supported: String, primitives and their wrappers)";
+        Object[] params = null;
+        String[] signature = null;
+        String firstError = null;
+        for (MBeanInfo.MBeanOperationInfo operation : sameArity) {
+            Object[] convertedParams = new Object[args.size()];
+            String[] convertedSignature = new String[args.size()];
+            String error = convertArguments(operationName, operation, args, convertedParams, convertedSignature);
+            if (error == null) {
+                params = convertedParams;
+                signature = convertedSignature;
+                break;
             }
-            try {
-                params[i] = convertStringToType(args.get(i), paramType);
-            } catch (RuntimeException e) {
-                return ERROR_INVOKING_OPERATION + "Invalid value '" + args.get(i) + "' for parameter '"
-                    + parameter.name() + "' of type " + paramType + " - " + e.getMessage();
+            if (firstError == null) {
+                firstError = error;
             }
-            signature[i] = paramType;
+        }
+        if (params == null) {
+            return ERROR_INVOKING_OPERATION + firstError;
         }
 
-        // Invoke the operation; on a connection failure, reconnect once and retry
+        // Invoke the operation. A connection failure is NOT retried: the target may already have executed
+        // the operation before the reply was lost, and operations are not necessarily idempotent.
         try {
             Object result = connectionManager.getConnection().invoke(objName, operationName, params, signature);
             return formatSuccess(objName, operationName, result, startTime);
         } catch (IOException e) {
-            logger.warn("Connection failed while invoking {}.{}, attempting one reconnect: {}",
-                objName, operationName, e.getMessage());
-            try {
-                connectionManager.reconnect();
-                Object result = connectionManager.getConnection().invoke(objName, operationName, params, signature);
-                return formatSuccess(objName, operationName, result, startTime);
-            } catch (IOException retryException) {
-                logger.error("Connection failed invoking operation after reconnect", retryException);
-                return ERROR_INVOKING_OPERATION + "Connection failed - try switchJmxConnection/reconnect - "
-                    + retryException.getMessage();
-            } catch (InstanceNotFoundException | MBeanException | ReflectionException | IllegalStateException retryException) {
-                return invocationError(objName, operationName, retryException, startTime);
-            }
+            logger.error("Connection failed while invoking {}.{}", objName, operationName, e);
+            connectionManager.reconnect();
+            return ERROR_INVOKING_OPERATION + "Connection failed - the operation may or may not have been "
+                + "executed on the target, so it was not retried. The connection was re-established; verify "
+                + "the MBean state before invoking again - " + e.getMessage();
         } catch (InstanceNotFoundException | MBeanException | ReflectionException e) {
-            return invocationError(objName, operationName, e, startTime);
+            return invocationError(objName, operationName, e);
         } catch (IllegalStateException e) {
             logger.error("Connection state error invoking operation", e);
             return ERROR_INVOKING_OPERATION + e.getMessage();
@@ -364,6 +369,46 @@ public class JmxService {
             logger.error("Unexpected error invoking operation", e);
             return ERROR_INVOKING_OPERATION + e.getMessage();
         }
+    }
+
+    /**
+     * Converts the string arguments to the operation's declared parameter types.
+     *
+     * @return null on success (params/signature filled in), otherwise an error message
+     */
+    private String convertArguments(String operationName, MBeanInfo.MBeanOperationInfo operation,
+                                    List<String> args, Object[] params, String[] signature) {
+        for (int i = 0; i < args.size(); i++) {
+            MBeanInfo.MBeanParameterInfo parameter = operation.parameters().get(i);
+            String paramType = parameter.type();
+            if (!SUPPORTED_PARAMETER_TYPES.contains(paramType)) {
+                return "Unsupported parameter type '" + paramType + "' for parameter '"
+                    + parameter.name() + "' of operation '" + operationName
+                    + "' (supported: String, primitives and their wrappers)";
+            }
+            String value = args.get(i);
+            if (value == null && PRIMITIVE_PARAMETER_TYPES.contains(paramType)) {
+                return "Null is not allowed for primitive parameter '" + parameter.name() + "' of type " + paramType;
+            }
+            if (value != null && (paramType.equals("boolean") || paramType.equals("java.lang.Boolean"))
+                    && !value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false")) {
+                return "Invalid value '" + value + "' for parameter '" + parameter.name()
+                    + "' of type " + paramType + " - expected true or false";
+            }
+            if (value != null && (paramType.equals("char") || paramType.equals("java.lang.Character"))
+                    && value.length() != 1) {
+                return "Invalid value '" + value + "' for parameter '" + parameter.name()
+                    + "' of type " + paramType + " - expected a single character";
+            }
+            try {
+                params[i] = convertStringToType(value, paramType);
+            } catch (RuntimeException e) {
+                return "Invalid value '" + args.get(i) + "' for parameter '"
+                    + parameter.name() + "' of type " + paramType + " - " + e.getMessage();
+            }
+            signature[i] = paramType;
+        }
+        return null;
     }
 
     /**
@@ -380,8 +425,7 @@ public class JmxService {
      * Maps an exception thrown by {@code MBeanServerConnection.invoke} to an error message.
      * {@link MBeanException} is unwrapped so the real cause is reported.
      */
-    private String invocationError(ObjectName objName, String operationName, Exception e, long startTime) {
-        long elapsed = System.currentTimeMillis() - startTime;
+    private String invocationError(ObjectName objName, String operationName, Exception e) {
         logger.error("Error invoking operation {}.{}", objName, operationName, e);
         String message;
         if (e instanceof MBeanException mbeanException && mbeanException.getCause() != null) {
@@ -390,14 +434,12 @@ public class JmxService {
         } else {
             message = e.getMessage();
         }
-        JmxOperationResult failure = JmxOperationResult.failure(objName, operationName, message, elapsed);
-        logger.debug("Operation result: {}", failure.getFormattedResult());
         return ERROR_INVOKING_OPERATION + message;
     }
 
     /**
      * Parses the arguments string as a JSON array of string values, e.g. {@code ["2"]}.
-     * Scalar JSON values (string/number/boolean) are accepted and coerced to strings.
+     * Scalar JSON values (string/number/boolean) are accepted and coerced to strings; null is passed through.
      */
     private List<String> parseOperationArguments(String arguments) {
         if (arguments == null || arguments.isBlank()) {
@@ -405,7 +447,7 @@ public class JmxService {
         }
         JsonNode node;
         try {
-            node = objectMapper.readTree(arguments);
+            node = ARGUMENT_READER.readValue(arguments);
         } catch (JsonProcessingException e) {
             throw new IllegalArgumentException(
                 "Invalid JSON arguments (expected a JSON array of string values, e.g. [\"2\"]): " + e.getMessage());
@@ -418,7 +460,12 @@ public class JmxService {
         List<String> args = new ArrayList<>(node.size());
         for (int i = 0; i < node.size(); i++) {
             JsonNode element = node.get(i);
-            if (element.isTextual() || element.isNumber() || element.isBoolean()) {
+            if (element.isNull()) {
+                args.add(null);
+            } else if (element.isNumber()) {
+                // 1e3 / 1.0 become "1000" / "1" so integral parameters accept them
+                args.add(element.decimalValue().stripTrailingZeros().toPlainString());
+            } else if (element.isTextual() || element.isBoolean()) {
                 args.add(element.asText());
             } else {
                 throw new IllegalArgumentException(

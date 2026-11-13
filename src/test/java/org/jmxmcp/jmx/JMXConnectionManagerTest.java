@@ -106,6 +106,38 @@ class JMXConnectionManagerTest {
     }
 
     @Test
+    void testFailedRedialKeepsExistingWorkingConnection() throws Exception {
+        JMXConnectionManager connectionManager = new JMXConnectionManager(new JmxConnectionProperties());
+        var server = javax.management.remote.JMXConnectorServerFactory.newJMXConnectorServer(
+            new javax.management.remote.JMXServiceURL("service:jmx:rmi://"), null,
+            java.lang.management.ManagementFactory.getPlatformMBeanServer());
+        server.start();
+        try {
+            var connector = javax.management.remote.JMXConnectorFactory.connect(server.getAddress());
+            var connection = connector.getMBeanServerConnection();
+
+            // A registered entry whose URL cannot be dialed, but which holds a live connector
+            String badUrl = "service:jmx:rmi:///jndi/rmi://127.0.0.1:1/jmxrmi";
+            connectionManager.addConnection("c1", "C1", JmxConnectionProperties.ConnectionType.REMOTE,
+                badUrl, null, null, Map.of());
+            var live = JmxConnectionInfo.createRemote("c1", "C1", badUrl, null, null, Map.of())
+                .withConnection(connection, connector, JmxConnectionInfo.ConnectionStatus.CONNECTED,
+                    connection.getMBeanCount());
+            connectionManager.getConnectionRegistry().updateConnection(live);
+
+            boolean result = connectionManager.connectToConnection("c1");
+
+            assertFalse(result);
+            var stored = connectionManager.getConnectionRegistry().getConnection("c1").orElseThrow();
+            assertTrue(stored.isConnected());
+            assertTrue(stored.connection().getMBeanCount() > 0, "old connector must still be usable");
+            connector.close();
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
     void testAddConnection() {
         // Create test properties for local connection
         JmxConnectionProperties properties = new JmxConnectionProperties();

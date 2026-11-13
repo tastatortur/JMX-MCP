@@ -364,7 +364,7 @@ With `-Dcom.sun.management.jmxremote.authenticate=false` (as in the aeol Docker 
 
 **Cause:** The active JMX connection died (target restarted, network drop, registry left in a stale state after an interrupted call).
 
-**Solution:** The server already attempts one automatic reconnect-and-retry per `invokeOperation` call, and `getConnection()` re-establishes a stale active connection on the next call. If it still fails:
+**Solution:** On an I/O failure the server re-establishes the connection but does not retry the operation (it may already have run on the target), and `getConnection()` re-establishes a stale active connection on the next call (at most one implicit attempt every 5 s). If it still fails:
 1. `listJmxConnections()` — check the status of the active connection
 2. `switchJmxConnection("<id>")` — reconnect to the same or another entry
 3. Re-run `discoverJmxServices()` if the registry was wiped

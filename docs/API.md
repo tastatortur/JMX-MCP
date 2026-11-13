@@ -230,7 +230,7 @@ Invokes an operation on an MBean. This is how an agent drives application behavi
 **Notes:**
 - If the MBean is not found or the operation name is unknown, the error lists the available operations/signatures of the MBean.
 - `MBeanException` causes are unwrapped into the error message (e.g. `IllegalArgumentException: no such element`).
-- On connection failure the server reconnects once and retries; if that fails the error suggests `switchJmxConnection`/reconnect.
+- On connection failure the server re-establishes the connection but does **not** retry the call (the target may already have executed the operation); verify the MBean state before invoking again.
 - Security validation (`JmxSecurityValidator`) runs before every invocation: dangerous domains are logged, dangerous operation names are only warnings unless listed in `jmx.mcp.security.dangerous-operations`, and argument values are checked for malicious patterns.
 
 ## Resources

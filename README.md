@@ -59,8 +59,8 @@ mvn clean package
 ### 2. Test the Server
 
 ```bash
-# Test with comprehensive validation
-python3 comprehensive-test.py
+# Unit tests plus the end-to-end test of all MCP tools
+mvn test
 ```
 
 ### 3. Configure Claude Desktop
@@ -230,25 +230,18 @@ Optimized for Claude Desktop integration:
 
 ## 🧪 Testing
 
-### Comprehensive Test Suite
-```bash
-# Run the comprehensive integration test
-python3 comprehensive-test.py
-```
-
-**Test Coverage:**
-- ✅ MCP Protocol compliance
-- ✅ JSON-RPC 2.0 communication
-- ✅ All 15 tools registration and execution
-- ✅ Multi-connection management
-- ✅ Service discovery and auto-registration
-- ✅ Resource discovery and access
-- ✅ Error handling and recovery
-
-### Unit Tests
+### Running the Tests
 ```bash
 mvn test
 ```
+
+**End-to-end test** (`McpToolsIntegrationTest`): registers the tools like the running server and calls them with MCP-style JSON arguments against a real JMX connection to the test JVM.
+- ✅ All 15 tools are registered
+- ✅ Tool schemas mark only the mandatory parameters as required
+- ✅ Connection management, MBean access, `invokeOperation`, `getJvmOverview` and `getThreadDump` work end to end
+- ✅ Errors come back as text instead of exceptions
+
+**Unit tests** cover the formatter, the security validator, connection handling (including re-dialing a restarted target) and each tool.
 
 ## 🔒 Security
 

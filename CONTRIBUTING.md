@@ -35,10 +35,11 @@ Thank you for your interest in contributing to the JMX MCP Server! This document
    mvn test
    ```
 
-5. **Run the comprehensive test**
+5. **Run the tests**
    ```bash
-   python3 comprehensive-test.py
+   mvn test
    ```
+   This includes `McpToolsIntegrationTest`, which registers the tools like the running server and calls them against a real JMX connection.
 
 ## 🔧 Development Guidelines
 
@@ -128,9 +129,6 @@ mvn test -Dtest=JmxServiceTest
 
 # Run with coverage
 mvn test jacoco:report
-
-# Run comprehensive integration test
-python3 comprehensive-test.py
 ```
 
 ## 📝 Documentation
@@ -251,7 +249,6 @@ Any other context, mockups, or examples.
 4. **Test your changes**
    ```bash
    mvn clean test
-   python3 comprehensive-test.py
    ```
 
 5. **Commit your changes**

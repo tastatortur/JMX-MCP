@@ -7,6 +7,8 @@
 
 A powerful **Model Context Protocol (MCP) server** that provides comprehensive JMX monitoring and management capabilities for AI assistants like Claude Desktop. Monitor Java applications, manage MBeans, and perform JMX operations through natural language interactions.
 
+> This project is a fork of [itz4blitz/JMX-MCP](https://github.com/itz4blitz/JMX-MCP). Many thanks to its author for the solid foundation that made this version possible.
+
 ## 🎥 Demo Video
 
 Watch the JMX MCP Server in action! See how Claude Desktop can monitor and manage Java applications through natural language:
@@ -51,7 +53,7 @@ https://github.com/user-attachments/assets/722e1885-5aeb-4584-8116-b93324e0abc1
 ### 1. Clone and Build
 
 ```bash
-git clone https://github.com/itz4blitz/JMX-MCP.git
+git clone https://github.com/tastatortur/JMX-MCP.git
 cd JMX-MCP
 mvn clean package
 ```
@@ -380,12 +382,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Model Context Protocol** for the standardized AI integration protocol
 - **Anthropic** for Claude Desktop and AI assistant capabilities
 - **OpenJDK Community** for the robust Java platform
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/itz4blitz/JMX-MCP/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/itz4blitz/JMX-MCP/discussions)
-- **Documentation**: [Wiki](https://github.com/itz4blitz/JMX-MCP/wiki)
 
 ---
 

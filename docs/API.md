@@ -4,7 +4,7 @@ This document provides detailed API reference for the JMX MCP Server tools and r
 
 ## Overview
 
-The JMX MCP Server exposes JMX functionality through the Model Context Protocol (MCP), providing 13 tools (core JMX operations plus connection management and discovery) and dynamic resources for AI assistants to interact with Java applications.
+The JMX MCP Server exposes JMX functionality through the Model Context Protocol (MCP), providing 15 tools (core JMX operations plus connection management and discovery) and dynamic resources for AI assistants to interact with Java applications.
 
 ## Tools
 
@@ -232,6 +232,53 @@ Invokes an operation on an MBean. This is how an agent drives application behavi
 - `MBeanException` causes are unwrapped into the error message (e.g. `IllegalArgumentException: no such element`).
 - On connection failure the server re-establishes the connection but does **not** retry the call (the target may already have executed the operation); verify the MBean state before invoking again.
 - Security validation (`JmxSecurityValidator`) runs before every invocation: dangerous domains are logged, dangerous operation names are only warnings unless listed in `jmx.mcp.security.dangerous-operations`, and argument values are checked for malicious patterns.
+
+### 8. getJvmOverview
+
+Returns a one-call summary of the connected JVM, built on the standard platform MBeans (works for local and remote connections). Takes no parameters.
+
+**Sections**: Runtime (VM, uptime, JVM arguments), Memory (heap, non-heap), Garbage collection (count and total time per collector), Memory pools, Threads, Classes, Operating system (CPU load, load average, physical memory).
+
+**Example Response**:
+```
+JVM Overview
+============
+
+Runtime:
+  VM: OpenJDK 64-Bit Server VM 21.0.13+11-LTS (Eclipse Adoptium)
+  Uptime: 2h 14m 3s
+  Arguments: [-Xmx512m]
+
+Memory:
+  Heap: 120.5 MB used, 256.0 MB committed, 512.0 MB max
+  ...
+```
+
+JVM arguments are shown with the value masked (`****`) when the argument name contains `pass`, `secret`, `token`, `key`, `credential` or `auth`, and each argument is truncated to 200 characters. Values the JVM reports as undefined (`-1`) are shown as `n/a`.
+
+A section the JVM fails to provide is reported as `unavailable`; HotSpot-specific OS attributes that are missing on other VMs are omitted. If the connection is dead the error names the connection failure.
+
+### 9. getThreadDump
+
+Returns a formatted thread dump with deadlock detection.
+
+**Parameters** (all optional):
+- `maxFrames` (integer): stack frames per thread, default 20, maximum 200
+- `threadNameFilter` (string): keep only threads whose name contains the text (case-insensitive)
+- `state` (string): keep only threads in this state (`NEW`, `RUNNABLE`, `BLOCKED`, `WAITING`, `TIMED_WAITING`, `TERMINATED`)
+
+Deadlocked threads are listed first and marked `[DEADLOCKED]`. At most 100 threads are listed. The JVM always returns full stacks for all threads; `maxFrames` and the thread cap only shorten the output, so on remote JVMs with thousands of threads the call itself can be slow.
+
+**Example Response**:
+```
+Thread dump: 42 threads, 1 match the filter
+Deadlocks: none
+
+"main" #1 RUNNABLE
+    at java.base/java.net.SocketInputStream.socketRead0(Native Method)
+    at com.example.Main.main(Main.java:12)
+    - locked <java.lang.Object@1b2c3d>
+```
 
 ## Resources
 

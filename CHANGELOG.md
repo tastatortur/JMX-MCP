@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JVM argument masking in `getJvmOverview` no longer hides harmless values such as `-Dcom.sun.management.jmxremote.authenticate=false`
 
 ### Changed
+- Replaced the Python script `comprehensive-test.py` with the JUnit test `McpToolsIntegrationTest`, which runs with `mvn test` (and therefore in CI): it checks that all 15 tools are registered, which parameters are required, and calls the tools end to end against a real JMX connection. The script only checked 6 tool names and was never run by the build
 - Upgraded Spring Boot from 3.4.1 to 3.5.16 and Spring AI from 1.0.0 to 1.1.8
 - Optional tool parameters (`listMBeans` domain, `invokeOperation` arguments, `addJmxConnection` username and password) are now advertised as optional in the tool schema; previously clients were required to supply them
 - `getAttribute` and `invokeOperation` render arrays, collections, maps, `CompositeData` and `TabularData` as compact readable text (e.g. `[-Xmx512m, -Dfoo=bar]`, `{committed=..., used=...}`) instead of `toString()` with repeated type metadata or `[Ljava.lang.String;@...`; key/value tables render as maps, output is capped at 100 elements per array, collection or table

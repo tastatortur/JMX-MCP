@@ -10,8 +10,8 @@ This guide helps you diagnose and resolve common issues with the JMX MCP Server.
 # Test if server starts correctly
 java -jar target/jmx-mcp-server-1.0.0.jar --spring.profiles.active=stdio
 
-# Run comprehensive tests
-python3 comprehensive-test.py
+# Run the tests (includes the end-to-end tool test)
+mvn test
 ```
 
 ### 2. Verify Java Version

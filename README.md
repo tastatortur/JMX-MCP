@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/722e1885-5aeb-4584-8116-b93324e0abc1
 - **Production Logging**: Configurable logging for different environments
 
 ### 🔌 **MCP Protocol Compliance**
-- **Tools**: 13 JMX management tools for AI interaction
+- **Tools**: 15 JMX management tools for AI interaction
 - **Resources**: All JMX attributes exposed as discoverable resources
 - **STDIO Transport**: Optimized for Claude Desktop integration
 - **JSON-RPC 2.0**: Full protocol compliance for reliable communication
@@ -106,7 +106,7 @@ Restart Claude Desktop and try these queries:
 "What's the garbage collection performance?"
 ```
 
-## 🔧 Available Tools (13 Total)
+## 🔧 Available Tools (15 Total)
 
 ### Core JMX Operations
 | Tool | Description | Example Usage |
@@ -117,6 +117,12 @@ Restart Claude Desktop and try these queries:
 | `setAttribute` | Set the value of a writable MBean attribute | "Set the log level to DEBUG" |
 | `invokeOperation` | Invoke an MBean operation; `arguments` is a JSON array of string values, e.g. `["2"]` for `click("2")` | "Click the 'Host game' button on the UI management MBean" |
 | `listDomains` | List all available MBean domains | "What domains are available?" |
+
+### JVM Diagnostics
+| Tool | Description | Example Usage |
+|------|-------------|---------------|
+| `getJvmOverview` | One-call summary: VM, uptime, JVM arguments, heap/non-heap, GC counts and times, memory pools, threads, classes, CPU and physical memory | "Give me an overview of this JVM" |
+| `getThreadDump` | Formatted thread dump with deadlock detection; optional `maxFrames`, `threadNameFilter`, `state` | "Is anything deadlocked? Show the blocked threads" |
 
 ### Connection Management
 | Tool | Description | Example Usage |
@@ -196,7 +202,7 @@ Recommendation: Monitor thread creation patterns.
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   Claude AI     │◄──►│  JMX MCP Server  │◄──►│  Java App JMX   │
 │                 │    │                  │    │                 │
-│ Natural Language│    │ • Tools (13)     │    │ • MBeans        │
+│ Natural Language│    │ • Tools (15)     │    │ • MBeans        │
 │ Queries         │    │ • Resources(224+)│    │ • Attributes    │
 │                 │    │ • JSON-RPC 2.0   │    │ • Operations    │
 │                 │    │ • Multi-Connect  │    │ • Discovery     │
@@ -233,7 +239,7 @@ python3 comprehensive-test.py
 **Test Coverage:**
 - ✅ MCP Protocol compliance
 - ✅ JSON-RPC 2.0 communication
-- ✅ All 13 tools registration and execution
+- ✅ All 15 tools registration and execution
 - ✅ Multi-connection management
 - ✅ Service discovery and auto-registration
 - ✅ Resource discovery and access

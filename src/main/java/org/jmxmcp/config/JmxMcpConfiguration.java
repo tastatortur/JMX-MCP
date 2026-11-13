@@ -5,6 +5,7 @@ import org.jmxmcp.jmx.JMXToMCPMapper;
 import org.jmxmcp.jmx.JmxConnectionRegistry;
 import org.jmxmcp.service.JmxDiscoveryService;
 import org.jmxmcp.service.JmxService;
+import org.jmxmcp.service.JvmDiagnosticsService;
 
 
 import org.slf4j.Logger;
@@ -94,10 +95,10 @@ public class JmxMcpConfiguration {
      * This ensures tools are properly registered in STDIO mode.
      */
     @Bean
-    public ToolCallbackProvider jmxToolCallbackProvider(JmxService jmxService) {
+    public ToolCallbackProvider jmxToolCallbackProvider(JmxService jmxService, JvmDiagnosticsService jvmDiagnosticsService) {
         logger.info("Creating JMX tool callback provider for MCP server");
         return MethodToolCallbackProvider.builder()
-            .toolObjects(jmxService)
+            .toolObjects(jmxService, jvmDiagnosticsService)
             .build();
     }
 }

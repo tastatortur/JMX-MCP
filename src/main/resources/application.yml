@@ -33,8 +33,11 @@ jmx:
   mcp:
     # JMX Connection settings
     connection:
-      type: LOCAL  # LOCAL or REMOTE
-      # url: "service:jmx:rmi:///jndi/rmi://localhost:9999/jmxrmi"  # For remote connections
+      type: LOCAL  # LOCAL or REMOTE (a LOCAL entry with a url is dialed as REMOTE)
+      # Remote connections: use the RMI registry JNDI URL on the target's JMX port - the reliable path.
+      # Local stub URLs (service:jmx:rmi://.../stub/...) can fail with RemoteStub serialVersionUID
+      # mismatches when the JVMs differ. With authenticate=false this is trusted-network-only.
+      # url: "service:jmx:rmi:///jndi/rmi://localhost:1098/jmxrmi"  # For remote connections
       # username: "admin"  # Optional for remote connections
       # password: "password"  # Optional for remote connections
       timeout: 30s

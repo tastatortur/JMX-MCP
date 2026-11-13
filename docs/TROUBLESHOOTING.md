@@ -324,6 +324,51 @@ jmx:
         "jmx.remote.x.request.waiting.timeout": "30000"
 ```
 
+### "LOCAL connections are deprecated" / "LOCAL connections without a JMX service URL are not supported"
+
+**Cause:** A connection was registered with `type: local` but has no JMX service URL to dial.
+
+**Solution:**
+1. Run `discoverJmxServices()` and connect to one of the discovered entries via `switchJmxConnection`, or
+2. Add a `REMOTE` connection with a JNDI registry URL — the reliable path:
+   ```json
+   {
+     "name": "addJmxConnection",
+     "arguments": {
+       "id": "aeol",
+       "name": "aeol",
+       "type": "REMOTE",
+       "url": "service:jmx:rmi:///jndi/rmi://localhost:1098/jmxrmi",
+       "username": "",
+       "password": ""
+     }
+   }
+   ```
+   A `LOCAL` entry that carries a URL (e.g. a discovered local stub) is automatically dialed as `REMOTE`.
+
+### "RemoteStub" / serialVersionUID mismatch on local stub URLs
+
+**Cause:** Connecting via a local stub URL (`service:jmx:rmi://127.0.0.1/stub/...` from the Attach API) fails when the MCP server JVM differs from the target JVM — the serialized `RemoteStub` is not compatible across JVM builds/versions.
+
+**Solution:** Use the RMI registry route on the target's JMX port instead:
+```
+service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi
+```
+Start the target with `-Dcom.sun.management.jmxremote.port=1098 -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false` (aeol Docker setup).
+
+### Remote JMX without authentication is trusted-network-only
+
+With `-Dcom.sun.management.jmxremote.authenticate=false` (as in the aeol Docker setup, port 1098), **anyone who can reach the port has full JMX access** — including invoking MBean operations via the `invokeOperation` tool. Only use `authenticate=false` on trusted networks; otherwise configure `jmxremote.password`/`jmxremote.access` files and pass credentials via `addJmxConnection`.
+
+### "Connection failed - try switchJmxConnection/reconnect" from invokeOperation
+
+**Cause:** The active JMX connection died (target restarted, network drop, registry left in a stale state after an interrupted call).
+
+**Solution:** On an I/O failure the server re-establishes the connection but does not retry the operation (it may already have run on the target), and `getConnection()` re-establishes a stale active connection on the next call (at most one implicit attempt every 5 s). If it still fails:
+1. `listJmxConnections()` — check the status of the active connection
+2. `switchJmxConnection("<id>")` — reconnect to the same or another entry
+3. Re-run `discoverJmxServices()` if the registry was wiped
+
 ## Performance Monitoring
 
 ### Monitor Server Health

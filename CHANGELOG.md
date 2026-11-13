@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions CI/CD workflows
 - Comprehensive documentation
 - Security policy and contributing guidelines
+- `invokeOperation` MCP tool: invoke MBean operations with a JSON array of string arguments (e.g. `["2"]` for `click("2")`); resolves the matching overload from discovered MBean info, converts String/primitive/wrapper parameters, reports unsupported parameter types and available signatures on mismatch, unwraps `MBeanException` causes, rejects trailing JSON garbage, accepts `null`/exponent numbers, picks the first same-arity overload whose parameters are convertible, and on connection failure reconnects but does not retry (operations may not be idempotent)
+- Connection robustness: bare `LOCAL` connections without a URL now fail with guidance to use `discoverJmxServices()` or a remote JNDI registry URL (`service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi`); `LOCAL` entries carrying a URL are dialed as `REMOTE`; `getConnection()` re-establishes a stale active connection (serialized, rate-limited to one attempt per 5 s) before failing; re-dialing closes the previous connector; `switchJmxConnection` refreshes the MBean cache immediately after a successful switch
+- Documentation: remote JNDI registry URLs documented as the reliable path (local stub URLs can fail with `RemoteStub` serialVersionUID mismatches across JVMs); `authenticate=false` remote JMX documented as trusted-network-only
 
 ## [1.0.0] - 2025-06-21
 

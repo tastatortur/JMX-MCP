@@ -18,6 +18,7 @@ import org.jmxmcp.model.MBeanInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
 import javax.management.Attribute;
@@ -83,7 +84,7 @@ public class JmxService {
     }
 
     @Tool(description = "List all discovered MBeans with their basic information. Optionally filter by domain.")
-    public String listMBeans(String domain) {
+    public String listMBeans(@ToolParam(required = false, description = "Only list MBeans in this domain") String domain) {
         try {
             Collection<MBeanInfo> mbeans;
             if (domain != null && !domain.trim().isEmpty()) {
@@ -278,7 +279,11 @@ public class JmxService {
     }
 
     @Tool(description = "Invoke an operation on an MBean. arguments is a JSON array of string values, e.g. [\"2\"] for click(\"2\"). Returns the result or an error.")
-    public String invokeOperation(String objectName, String operationName, String arguments) {
+    public String invokeOperation(
+            String objectName,
+            String operationName,
+            @ToolParam(required = false, description = "JSON array of string values; omit for operations without parameters")
+            String arguments) {
         long startTime = System.currentTimeMillis();
         ObjectName objName;
         try {
@@ -686,7 +691,13 @@ public class JmxService {
     }
 
     @Tool(description = "Add a new JMX connection manually. type is LOCAL or REMOTE (a LOCAL entry with a url, e.g. a discovered local stub, is dialed as REMOTE). Prefer remote JNDI registry URLs such as service:jmx:rmi:///jndi/rmi://host:1098/jmxrmi - local stub URLs (service:jmx:rmi://.../stub/...) can fail with RemoteStub serialVersionUID mismatches when the JVMs differ. Note: remote JMX with authenticate=false is trusted-network-only.")
-    public String addJmxConnection(String id, String name, String type, String url, String username, String password) {
+    public String addJmxConnection(
+            String id,
+            String name,
+            String type,
+            String url,
+            @ToolParam(required = false, description = "Username for authenticated remote JMX") String username,
+            @ToolParam(required = false, description = "Password for authenticated remote JMX") String password) {
         try {
             JmxConnectionProperties.ConnectionType connectionType = parseConnectionType(type);
             if (connectionType == null) {

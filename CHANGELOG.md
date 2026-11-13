@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Upgraded Spring Boot from 3.4.1 to 3.5.16 and Spring AI from 1.0.0 to 1.1.8
+- Optional tool parameters (`listMBeans` domain, `invokeOperation` arguments, `addJmxConnection` username and password) are now advertised as optional in the tool schema; previously clients were required to supply them
 - `getAttribute` and `invokeOperation` render arrays, collections, maps, `CompositeData` and `TabularData` as compact readable text (e.g. `[-Xmx512m, -Dfoo=bar]`, `{committed=..., used=...}`) instead of `toString()` with repeated type metadata or `[Ljava.lang.String;@...`; key/value tables render as maps, output is capped at 100 elements per array, collection or table
 - `invokeOperation` reports a failed value conversion (e.g. `"abc"` for a `long` parameter) instead of an unrelated "unsupported parameter type" error from another overload
 

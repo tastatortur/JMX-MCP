@@ -289,6 +289,27 @@ public class JMXConnectionManager {
     }
 
     /**
+     * Re-dials the active connection after a call on {@code failed} hit a connection failure.
+     * <p>
+     * The registry keeps a dead target marked as connected, so a failing call is the only signal that the
+     * connection is gone. If another caller has already replaced the connection, nothing is re-dialed:
+     * that caller's new connection is used and re-dialing again would close it under them.
+     *
+     * @return true if the active connection is a different, live one and the call can be repeated
+     */
+    public synchronized boolean reconnectAfterFailure(MBeanServerConnection failed) {
+        Optional<JmxConnectionInfo> active = connectionRegistry.getActiveConnection();
+        if (active.isEmpty()) {
+            return false;
+        }
+        if (active.get().isConnected() && active.get().connection() != failed) {
+            return true;
+        }
+        logger.info("Connection {} failed - attempting one reconnect", active.get().id());
+        return connectToConnection(active.get().id());
+    }
+
+    /**
      * Disconnects from the active JMX server.
      */
     public void disconnect() {

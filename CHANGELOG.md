@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `getJvmOverview` MCP tool: one-call JVM summary (VM name/version/uptime, JVM arguments, heap and non-heap usage, per-collector GC counts and times, memory pool usage, thread and class counts, OS CPU load and physical memory) built on standard platform MBeans, so it works for local and remote connections; JVM arguments with credential-like names are masked; a section that a JVM does not support is reported as unavailable instead of failing the call
 - `getThreadDump` MCP tool: compact thread dump (`at Class.method(File.java:123)` frames, waiting-on lock and its owner, held monitors and synchronizers) with deadlocked threads reported first; optional `maxFrames` (default 20, max 200), `threadNameFilter` and `state` parameters, capped at 100 threads; the parameters are advertised as optional in the tool schema
 
+### Fixed
+- `getAttribute`, `getJvmOverview` and `getThreadDump` re-dial a dead connection (for example after the target JVM restarted on the same address) and repeat the call once, instead of failing with `The client has been closed` until `switchJmxConnection` or a failed `invokeOperation` re-established it. Writes (`setAttribute`, `invokeOperation`) are still never retried
+- `getJvmOverview` reports a dead connection once instead of repeating the same error in every section
+- JVM argument masking in `getJvmOverview` no longer hides harmless values such as `-Dcom.sun.management.jmxremote.authenticate=false`
+
 ### Changed
 - Upgraded Spring Boot from 3.4.1 to 3.5.16 and Spring AI from 1.0.0 to 1.1.8
 - Optional tool parameters (`listMBeans` domain, `invokeOperation` arguments, `addJmxConnection` username and password) are now advertised as optional in the tool schema; previously clients were required to supply them

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import org.jmxmcp.config.JmxConnectionProperties;
 import org.jmxmcp.config.JmxSecurityValidator;
+import org.jmxmcp.jmx.ConnectionRetry;
 import org.jmxmcp.jmx.JMXConnectionManager;
 import org.jmxmcp.jmx.JmxConnectionInfo;
 import org.jmxmcp.jmx.JmxConnectionRegistry;
@@ -193,8 +194,7 @@ public class JmxService {
                 return SECURITY_VALIDATION_FAILED + validation.getErrorMessage();
             }
             
-            MBeanServerConnection connection = connectionManager.getConnection();
-            Object value = connection.getAttribute(objName, attributeName);
+            Object value = ConnectionRetry.read(connectionManager, c -> c.getAttribute(objName, attributeName));
             
             return "Attribute '" + attributeName + "' = " +
                    JmxValueFormatter.format(value) +
@@ -213,7 +213,7 @@ public class JmxService {
         } catch (IllegalStateException e) {
             logger.error("Connection state error getting attribute", e);
             return ERROR_GETTING_ATTRIBUTE + e.getMessage();
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             logger.error("Unexpected error getting attribute", e);
             return ERROR_GETTING_ATTRIBUTE + e.getMessage();
         }
